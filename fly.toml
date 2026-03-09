@@ -1,0 +1,21 @@
+app = 'ai-ark-mcp'
+primary_region = 'yyz'
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 1
+  concurrency_limit = 500
+
+[mounts]
+  source = "ark_data"
+  destination = "/data"
+
+[env]
+  MCP_PORT = "8080"
+  MCP_BASE_URL = "https://ai-ark-mcp.fly.dev"
+  OAUTH_STATE_PATH = "/data/oauth_state.json"

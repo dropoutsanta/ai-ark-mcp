@@ -149,7 +149,34 @@ def _ark_request(method: str, path: str, *, body: dict | None = None, timeout: f
 
 # ── FastMCP instance ──────────────────────────────────────────────────────────
 
-mcp = FastMCP("ai-ark", host="0.0.0.0", port=int(os.environ.get("MCP_PORT", "8000")))
+mcp = FastMCP(
+    "ai-ark",
+    instructions="""AI Ark MCP — search 400M+ people and 69M+ companies, find verified
+emails and phone numbers, and analyze personalities.
+
+KEY WORKFLOWS:
+
+1. FIND PEOPLE WITH EMAILS (most common):
+   - Call export_people_with_email(job_titles=..., industries=..., ...)
+   - Returns a trackId immediately
+   - Call get_export_results(track_id=trackId) to poll — returns "processing"
+     at first, then full contact + email data once ready (15-120 seconds)
+
+2. SEARCH WITHOUT EMAILS:
+   - search_people(...) returns profiles instantly (no emails)
+   - search_companies(...) returns company data instantly
+
+3. LOOK UP SPECIFIC PEOPLE:
+   - reverse_people_lookup(search="email@example.com") — by email or phone
+   - find_mobile_phone(linkedin="...") — get phone numbers
+   - analyze_personality(url="linkedin.com/in/...") — DISC/personality analysis
+
+All search tools accept simple comma-separated parameters (e.g.
+job_titles="CEO,CTO", industries="software development") — no need to
+construct complex JSON unless you want advanced filters.""",
+    host="0.0.0.0",
+    port=int(os.environ.get("MCP_PORT", "8000")),
+)
 
 
 # ── Helper: build nested filter from flat params ─────────────────────────────
@@ -221,32 +248,34 @@ def search_companies(
     page: int = 0,
     size: int = 25,
 ) -> dict:
-    """Search 69M+ enriched company profiles in the AI Ark database.
+    """Search 69M+ enriched company profiles. Returns company data instantly
+    (no polling needed).
 
-    You can either pass the full nested API body as `filters_json`, or use
-    the convenient flat parameters below (which get assembled automatically).
+    Results include: name, domain, industry, location, employee count,
+    revenue, technologies, LinkedIn URL, logo, and description.
+
+    Use the flat parameters for simple queries. For advanced nested
+    filters, pass the full API body as filters_json (dict or JSON string).
 
     Args:
-        filters_json: Full AI Ark request body as JSON string. If provided,
-            all other filter params are ignored. Must include "account" key
-            with nested filters. See docs.ai-ark.com/reference for schema.
-        industries: Comma-separated industries (e.g. "technology,retail").
+        filters_json: Full AI Ark request body (dict or JSON string).
+            If provided, all other filter params are ignored.
+        industries: Comma-separated (e.g. "software development,fintech").
         locations: Comma-separated HQ locations (e.g. "United States,Germany").
         employee_size: Comma-separated ranges (e.g. "51-200,201-500").
-        company_names: Comma-separated company names to search for.
+        company_names: Comma-separated company names.
         domains: Comma-separated domains (e.g. "apple.com,google.com").
-        technologies: Comma-separated technologies (e.g. "React,AWS").
-        company_types: Comma-separated types. Valid: SELF_EMPLOYED, SOLE_PROPRIETORSHIP,
+        technologies: Comma-separated (e.g. "React,AWS,Salesforce").
+        company_types: Valid: SELF_EMPLOYED, SOLE_PROPRIETORSHIP,
             PARTNERSHIP, PRIVATELY_HELD, PUBLIC_COMPANY, GOVERNMENT_AGENCY,
             NON_PROFIT, SELF_OWNED, EDUCATIONAL.
-        founded_year_start: Minimum founded year (e.g. 2015).
-        founded_year_end: Maximum founded year (e.g. 2023).
-        revenue_start: Minimum annual revenue in USD.
-        revenue_end: Maximum annual revenue in USD.
-        keywords: Comma-separated keywords to match against company name,
-            description, SEO, and keyword fields.
-        lookalike_domains: Up to 5 company domains/LinkedIn URLs to find
-            similar companies (e.g. "amazon.com,shopify.com").
+        founded_year_start: Min founded year (e.g. 2015).
+        founded_year_end: Max founded year (e.g. 2023).
+        revenue_start: Min annual revenue in USD.
+        revenue_end: Max annual revenue in USD.
+        keywords: Comma-separated keywords for company name/description/SEO.
+        lookalike_domains: Up to 5 domains to find similar companies
+            (e.g. "amazon.com,shopify.com").
         page: Page number (0-based). Default 0.
         size: Results per page (max 100). Default 25.
     """
@@ -340,39 +369,39 @@ def search_people(
     page: int = 0,
     size: int = 25,
 ) -> dict:
-    """Search 400M+ enriched people profiles in the AI Ark database.
+    """Search 400M+ people profiles. Returns profiles instantly (no polling).
 
-    Returns full profiles with name, title, company, location, LinkedIn,
-    skills, education, work history, and more. The response includes a
-    `trackId` that can be used with `find_emails_by_track_id` to find
-    verified email addresses for the results.
+    Returns: name, title, company, location, LinkedIn, skills, education,
+    work history, social links, and more. Does NOT include email addresses.
 
-    You can either pass the full nested API body as `filters_json`, or use
-    the flat parameters (which get assembled automatically).
+    To get emails, use one of these two workflows:
+      A) Use export_people_with_email instead (includes emails automatically).
+      B) Use search_people first, then pass the returned trackId to
+         find_emails_by_track_id, then poll with get_export_results.
+
+    Use the flat parameters for simple queries. For advanced nested
+    filters, pass the full API body as filters_json (dict or JSON string).
 
     Args:
-        filters_json: Full AI Ark request body as JSON string. If provided,
-            all other filter params are ignored.
-        job_titles: Comma-separated titles (e.g. "CEO,CTO,VP of Sales").
-            Uses SMART matching so "Sales Director" also matches
+        filters_json: Full AI Ark request body (dict or JSON string).
+            If provided, all other filter params are ignored.
+        job_titles: Comma-separated (e.g. "CEO,CTO,VP of Sales").
+            Uses SMART matching: "Sales Director" also matches
             "Director of Sales".
         locations: Comma-separated person locations (e.g. "new york,california").
-        seniority_levels: Comma-separated levels (e.g. "c_suite,vp,director").
-            Valid: owner, founder, c_suite, partner, vp, director, manager,
-            senior, entry, intern, unpaid.
-        departments: Comma-separated departments (e.g. "sales,marketing,engineering").
-        skills: Comma-separated skills (e.g. "Python,Machine Learning").
-        languages: Comma-separated languages (e.g. "English,French").
-        profile_keywords: Comma-separated keywords to match in headline,
-            summary, skills, and work history.
-        linkedin_urls: Comma-separated LinkedIn profile URLs to look up
-            specific people (e.g. "https://linkedin.com/in/johndoe").
-        industries: Comma-separated company industries (e.g. "technology,saas").
-        company_hq_locations: Comma-separated company HQ locations.
-        employee_size: Comma-separated employee ranges (e.g. "51-200,201-500").
-        company_types: Comma-separated company types (e.g. "PRIVATELY_HELD").
-        technologies: Comma-separated tech stack (e.g. "Salesforce,HubSpot").
-        company_keywords: Comma-separated keywords for company name/description.
+        seniority_levels: Comma-separated. Valid: owner, founder, c_suite,
+            partner, vp, director, manager, senior, entry, intern, unpaid.
+        departments: Comma-separated (e.g. "sales,marketing,engineering").
+        skills: Comma-separated (e.g. "Python,Machine Learning").
+        languages: Comma-separated (e.g. "English,French").
+        profile_keywords: Keywords for headline, summary, skills, work history.
+        linkedin_urls: LinkedIn profile URLs to look up specific people.
+        industries: Company industries (e.g. "software development,fintech").
+        company_hq_locations: Company HQ locations.
+        employee_size: Ranges (e.g. "51-200,201-500").
+        company_types: E.g. "PRIVATELY_HELD,PUBLIC_COMPANY".
+        technologies: Tech stack (e.g. "Salesforce,HubSpot").
+        company_keywords: Keywords for company name/description.
         founded_year_start: Min company founded year.
         founded_year_end: Max company founded year.
         revenue_start: Min annual revenue in USD.
@@ -488,23 +517,27 @@ def export_people_with_email(
     page: int = 0,
     size: int = 25,
 ) -> dict:
-    """Export people with verified email addresses.
+    """Find people AND their verified email addresses in one step.
 
-    Uses the same filters as search_people. Email verification happens
-    asynchronously. Returns a trackId — use get_export_results(trackId)
-    to poll for the full contact + email data once ready.
+    This is a two-step async process — here's exactly what to do:
+      1. Call this tool → returns a trackId immediately.
+      2. Call get_export_results(track_id=trackId) to poll for results.
+         First few calls will say "processing". Once done, returns full
+         contact profiles with verified email addresses.
 
-    Max 10,000 results per export. All emails are verified in real time
-    by BounceBan. Typical completion: 15-120 seconds depending on batch size.
+    Emails are verified in real time by BounceBan. Typical completion
+    time: 15-120 seconds depending on batch size. Max 10,000 per export.
+
+    Same filters as search_people. Use flat params for simple queries.
 
     Args:
-        filters_json: Full AI Ark request body as JSON string.
-        job_titles: Comma-separated job titles.
+        filters_json: Full AI Ark request body (dict or JSON string).
+        job_titles: Comma-separated (e.g. "CEO,CTO").
         locations: Comma-separated person locations.
-        seniority_levels: Comma-separated seniority levels.
-        departments: Comma-separated departments.
-        industries: Comma-separated company industries.
-        employee_size: Comma-separated ranges (e.g. "51-200,201-500").
+        seniority_levels: E.g. "c_suite,vp,director".
+        departments: E.g. "sales,marketing,engineering".
+        industries: Company industries (e.g. "software development").
+        employee_size: Ranges (e.g. "51-200,201-500").
         page: Page number (0-based).
         size: Number of results (max 10000).
     """
@@ -558,14 +591,14 @@ def export_people_with_email(
 
 @mcp.tool()
 def reverse_people_lookup(search: str) -> dict:
-    """Look up a person by email address or phone number.
+    """Look up a person by email or phone number. Returns instantly.
 
-    Returns the full profile (name, title, company, location, LinkedIn,
-    work history, education, skills) for the matching person.
+    Given an email or phone number, returns the full profile: name, title,
+    company, location, LinkedIn URL, work history, education, and skills.
 
     Args:
-        search: Email address or phone number to look up
-            (e.g. "john@example.com" or "+14155551234").
+        search: Email address (e.g. "john@example.com") or phone number
+            (e.g. "+14155551234").
     """
     return _ark_request("POST", "/v1/people/reverse-lookup", body={"search": search})
 
@@ -576,16 +609,16 @@ def find_mobile_phone(
     domain: Optional[str] = None,
     name: Optional[str] = None,
 ) -> dict:
-    """Find mobile phone numbers for a person.
+    """Find mobile phone numbers for a person. Returns instantly.
 
-    Two search modes:
-    - LinkedIn: Provide only `linkedin` URL.
-    - Domain + Name: Provide both `domain` and `name`.
+    Two ways to search (pick one):
+      A) By LinkedIn URL — just pass linkedin.
+      B) By company + name — pass both domain and name.
 
     Args:
         linkedin: LinkedIn profile URL (e.g. "https://www.linkedin.com/in/johndoe").
-        domain: Company domain (e.g. "acme.com"). Must be used with `name`.
-        name: Person's full name (e.g. "John Doe"). Must be used with `domain`.
+        domain: Company domain (e.g. "acme.com"). Use together with name.
+        name: Person's full name (e.g. "John Doe"). Use together with domain.
     """
     body: dict[str, Any] = {}
     if linkedin:
@@ -599,14 +632,13 @@ def find_mobile_phone(
 
 @mcp.tool()
 def analyze_personality(url: str) -> dict:
-    """Analyze a person's personality based on their LinkedIn profile.
+    """Analyze a person's personality from their LinkedIn. Returns instantly.
 
-    Returns DISC assessment, OCEAN (Big Five) scores, selling tips
-    (email style, tone, closing line, subject line advice), communication
-    preferences, and key decision-making traits.
+    Returns DISC assessment, OCEAN (Big Five) scores, archetype,
+    selling tips (email style, tone, closing line, subject line),
+    communication preferences, and decision-making traits.
 
-    Useful for personalizing outreach emails and understanding how to
-    approach a prospect.
+    Great for personalizing outreach emails to match a prospect's style.
 
     Args:
         url: LinkedIn profile URL (e.g. "https://www.linkedin.com/in/johndoe").
@@ -616,14 +648,17 @@ def analyze_personality(url: str) -> dict:
 
 @mcp.tool()
 def find_emails_by_track_id(track_id: str) -> dict:
-    """Trigger email finding for a people search result using its trackId.
+    """Find verified emails for people from a previous search_people call.
 
-    The trackId comes from search_people responses. Each trackId can only
-    be used ONCE and expires 6 hours after the original search.
+    IMPORTANT: Only use this if you already called search_people and have
+    a trackId. If you haven't searched yet, use export_people_with_email
+    instead (it combines search + email finding in one step).
 
-    All emails are verified in real time by BounceBan. Use
-    get_export_results(track_id) to poll for the full results once
-    processing is complete. Typical completion: 15-120 seconds.
+    Each trackId can only be used ONCE and expires 6 hours after the
+    original search.
+
+    After calling this, poll with get_export_results(track_id) to
+    retrieve the full results. Typical completion: 15-120 seconds.
 
     Args:
         track_id: The trackId from a search_people response.
@@ -645,29 +680,38 @@ def find_emails_by_track_id(track_id: str) -> dict:
 
 @mcp.tool()
 def get_email_statistics(track_id: str) -> dict:
-    """Check email-finding progress for a given trackId.
+    """Check email-finding progress. Returns counts only, not the actual data.
 
-    Returns statistics (total people, emails found so far) and state
-    (PENDING, COMPLETED, etc.). Use this to poll progress after calling
-    find_emails_by_track_id or export_people_with_email.
+    Prefer get_export_results instead — it returns both progress AND the
+    actual email data once ready. Only use this tool if you just need a
+    quick status check without the full payload.
+
+    Returns: total people, emails found so far, and state (PENDING/DONE).
 
     Args:
-        track_id: The trackId from a search/export/email-finder response.
+        track_id: The trackId from an export or email-finder response.
     """
     return _ark_request("GET", f"/v1/people/statistics/{track_id}")
 
 
 @mcp.tool()
 def get_export_results(track_id: str) -> dict:
-    """Retrieve the results of an email export or email-finder job.
+    """Get the results of an email export. This is the tool you poll.
 
-    After calling export_people_with_email or find_emails_by_track_id,
-    use this tool to poll for results. Returns the full contact + verified
-    email data once complete, or a progress update if still processing.
+    Call this after export_people_with_email or find_emails_by_track_id.
+    It returns one of three things:
+      - "processing" with progress (e.g. "3/10 emails found") → poll again
+        in 10-30 seconds
+      - "completed_awaiting_delivery" → results arriving, try in 5 seconds
+      - Full data array with contacts, verified emails, companies, etc.
 
-    Typical flow:
-      1. Call export_people_with_email → get trackId
-      2. Call get_export_results(trackId) → "processing" or full data
+    Standard workflow:
+      1. export_people_with_email(...) → returns trackId
+      2. get_export_results(trackId) → poll until you get the data array
+
+    The returned data includes for each person: name, title, company,
+    location, LinkedIn, education, work history, and verified email
+    addresses with validation status (VALID/INVALID) and MX provider.
 
     Args:
         track_id: The trackId from an export or email-finder response.
@@ -710,10 +754,7 @@ def get_export_results(track_id: str) -> dict:
 
 @mcp.tool()
 def get_credits() -> dict:
-    """Check how many API credits remain in your AI Ark account.
-
-    Returns the total number of remaining credits.
-    """
+    """Check remaining AI Ark API credits. Returns the credit balance."""
     return _ark_request("GET", "/v1/payments/credits")
 
 

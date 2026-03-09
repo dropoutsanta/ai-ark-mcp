@@ -148,6 +148,17 @@ def _parse_json_or_csv(value: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
 
+def _coerce_filters(raw) -> dict | None:
+    """Accept filters_json as a JSON string or an already-parsed dict."""
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        return json.loads(raw)
+    return None
+
+
 def _parse_range_pairs(value: str) -> list[dict]:
     """Parse range specs like '1-10,51-200' into [{start:1,end:10},{start:51,end:200}]."""
     ranges = []
@@ -166,7 +177,7 @@ def _parse_range_pairs(value: str) -> list[dict]:
 
 @mcp.tool()
 def search_companies(
-    filters_json: Optional[str] = None,
+    filters_json: Any = None,
     industries: Optional[str] = None,
     locations: Optional[str] = None,
     employee_size: Optional[str] = None,
@@ -214,8 +225,8 @@ def search_companies(
     """
     if filters_json:
         try:
-            body = json.loads(filters_json)
-        except json.JSONDecodeError:
+            body = _coerce_filters(filters_json)
+        except (json.JSONDecodeError, TypeError):
             return {"error": "Invalid JSON in filters_json"}
         body.setdefault("page", page)
         body.setdefault("size", min(size, 100))
@@ -280,7 +291,7 @@ def search_companies(
 
 @mcp.tool()
 def search_people(
-    filters_json: Optional[str] = None,
+    filters_json: Any = None,
     job_titles: Optional[str] = None,
     locations: Optional[str] = None,
     seniority_levels: Optional[str] = None,
@@ -344,8 +355,8 @@ def search_people(
     """
     if filters_json:
         try:
-            body = json.loads(filters_json)
-        except json.JSONDecodeError:
+            body = _coerce_filters(filters_json)
+        except (json.JSONDecodeError, TypeError):
             return {"error": "Invalid JSON in filters_json"}
         body.setdefault("page", page)
         body.setdefault("size", min(size, 100))
@@ -440,7 +451,7 @@ def search_people(
 
 @mcp.tool()
 def export_people_with_email(
-    filters_json: Optional[str] = None,
+    filters_json: Any = None,
     job_titles: Optional[str] = None,
     locations: Optional[str] = None,
     seniority_levels: Optional[str] = None,
@@ -476,8 +487,8 @@ def export_people_with_email(
     """
     if filters_json:
         try:
-            body = json.loads(filters_json)
-        except json.JSONDecodeError:
+            body = _coerce_filters(filters_json)
+        except (json.JSONDecodeError, TypeError):
             return {"error": "Invalid JSON in filters_json"}
         body.setdefault("page", page)
         body.setdefault("size", min(size, 10000))
@@ -618,6 +629,9 @@ def resend_webhook(track_id: str, webhook: str) -> dict:
     Use this when the initial webhook delivery failed or you need to
     send results to a different URL. AI Ark automatically retries
     webhooks up to 30 times, but this lets you manually re-trigger.
+
+    Note: This endpoint may not be available on all AI Ark plans.
+    If you get a 404, the feature is not enabled for your account.
 
     Args:
         track_id: The trackId from the original request.

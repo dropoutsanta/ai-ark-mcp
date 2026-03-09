@@ -42,6 +42,7 @@ _token_credentials: dict[str, dict] = {}
 
 _MCP_BASE_URL = os.environ.get("MCP_BASE_URL", "https://ai-ark-mcp.fly.dev")
 _STATE_PATH = Path(os.environ.get("OAUTH_STATE_PATH", "/data/oauth_state.json"))
+_RESULTS_DIR = Path(os.environ.get("RESULTS_DIR", "/data/results"))
 
 
 def _save_state() -> None:
@@ -77,6 +78,32 @@ _load_state()
 
 def _get_base_url() -> str:
     return _MCP_BASE_URL.rstrip("/")
+
+
+def _save_receipt_mapping(track_id: str, receipt_id: str) -> None:
+    """Map a trackId to a receipt ID so get_export_results can find webhook data."""
+    mapping_path = _RESULTS_DIR / "_mappings.json"
+    _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    mappings = {}
+    if mapping_path.exists():
+        try:
+            mappings = json.loads(mapping_path.read_text())
+        except Exception:
+            pass
+    mappings[track_id] = receipt_id
+    mapping_path.write_text(json.dumps(mappings))
+
+
+def _load_receipt_id(track_id: str) -> str | None:
+    """Look up the receipt ID for a given trackId."""
+    mapping_path = _RESULTS_DIR / "_mappings.json"
+    if not mapping_path.exists():
+        return None
+    try:
+        mappings = json.loads(mapping_path.read_text())
+        return mappings.get(track_id)
+    except Exception:
+        return None
 
 
 # ── Ark API client ────────────────────────────────────────────────────────────
@@ -458,20 +485,17 @@ def export_people_with_email(
     departments: Optional[str] = None,
     industries: Optional[str] = None,
     employee_size: Optional[str] = None,
-    webhook: Optional[str] = None,
     page: int = 0,
     size: int = 25,
 ) -> dict:
-    """Export people with verified email addresses (async via webhook).
+    """Export people with verified email addresses.
 
-    Uses the same filters as search_people. Results are processed
-    asynchronously. Provide a webhook URL to receive the results when
-    ready, or use get_email_statistics to poll progress.
+    Uses the same filters as search_people. Email verification happens
+    asynchronously. Returns a trackId — use get_export_results(trackId)
+    to poll for the full contact + email data once ready.
 
     Max 10,000 results per export. All emails are verified in real time
-    by BounceBan.
-
-    Returns a trackId for tracking progress and retrieving results.
+    by BounceBan. Typical completion: 15-120 seconds depending on batch size.
 
     Args:
         filters_json: Full AI Ark request body as JSON string.
@@ -481,7 +505,6 @@ def export_people_with_email(
         departments: Comma-separated departments.
         industries: Comma-separated company industries.
         employee_size: Comma-separated ranges (e.g. "51-200,201-500").
-        webhook: URL to receive async notification when export completes.
         page: Page number (0-based).
         size: Number of results (max 10000).
     """
@@ -492,40 +515,45 @@ def export_people_with_email(
             return {"error": "Invalid JSON in filters_json"}
         body.setdefault("page", page)
         body.setdefault("size", min(size, 10000))
-        if webhook:
-            body["webhook"] = webhook
-        return _ark_request("POST", "/v1/people/export", body=body)
+    else:
+        contact: dict[str, Any] = {}
+        account: dict[str, Any] = {}
 
-    contact: dict[str, Any] = {}
-    account: dict[str, Any] = {}
+        if job_titles:
+            titles = _parse_json_or_csv(job_titles)
+            contact["experience"] = {
+                "current": {"title": _build_any_include_smart(titles)}
+            }
+        if locations:
+            contact["location"] = _build_any_include([loc.lower() for loc in _parse_json_or_csv(locations)])
+        if seniority_levels:
+            contact["seniority"] = _build_any_include(_parse_json_or_csv(seniority_levels))
+        if departments:
+            contact["departmentAndFunction"] = _build_any_include(_parse_json_or_csv(departments))
+        if industries:
+            account["industry"] = _build_any_include([i.lower() for i in _parse_json_or_csv(industries)])
+        if employee_size:
+            ranges = _parse_range_pairs(employee_size)
+            if ranges:
+                account["employeeSize"] = {"type": "RANGE", "range": ranges}
 
-    if job_titles:
-        titles = _parse_json_or_csv(job_titles)
-        contact["experience"] = {
-            "current": {"title": _build_any_include_smart(titles)}
-        }
-    if locations:
-        contact["location"] = _build_any_include([loc.lower() for loc in _parse_json_or_csv(locations)])
-    if seniority_levels:
-        contact["seniority"] = _build_any_include(_parse_json_or_csv(seniority_levels))
-    if departments:
-        contact["departmentAndFunction"] = _build_any_include(_parse_json_or_csv(departments))
-    if industries:
-        account["industry"] = _build_any_include([i.lower() for i in _parse_json_or_csv(industries)])
-    if employee_size:
-        ranges = _parse_range_pairs(employee_size)
-        if ranges:
-            account["employeeSize"] = {"type": "RANGE", "range": ranges}
+        body: dict[str, Any] = {"page": page, "size": min(size, 10000)}
+        if contact:
+            body["contact"] = contact
+        if account:
+            body["account"] = account
 
-    body: dict[str, Any] = {"page": page, "size": min(size, 10000)}
-    if contact:
-        body["contact"] = contact
-    if account:
-        body["account"] = account
-    if webhook:
-        body["webhook"] = webhook
+    receipt_id = secrets.token_urlsafe(16)
+    body["webhook"] = _webhook_url_for(receipt_id)
 
-    return _ark_request("POST", "/v1/people/export", body=body)
+    result = _ark_request("POST", "/v1/people/export", body=body)
+
+    track_id = result.get("trackId")
+    if track_id and "error" not in result:
+        _save_receipt_mapping(track_id, receipt_id)
+        result["_hint"] = f"Use get_export_results(track_id='{track_id}') to poll for results."
+
+    return result
 
 
 @mcp.tool()
@@ -587,25 +615,32 @@ def analyze_personality(url: str) -> dict:
 
 
 @mcp.tool()
-def find_emails_by_track_id(track_id: str, webhook: str = "") -> dict:
+def find_emails_by_track_id(track_id: str) -> dict:
     """Trigger email finding for a people search result using its trackId.
 
-    The trackId comes from search_people or export_people_with_email
-    responses. Each trackId can only be used ONCE and expires 6 hours
-    after the original search.
+    The trackId comes from search_people responses. Each trackId can only
+    be used ONCE and expires 6 hours after the original search.
 
-    All emails are verified in real time by BounceBan. When complete,
-    results are POSTed to your webhook URL.
+    All emails are verified in real time by BounceBan. Use
+    get_export_results(track_id) to poll for the full results once
+    processing is complete. Typical completion: 15-120 seconds.
 
     Args:
         track_id: The trackId from a search_people response.
-        webhook: URL to receive async notification when complete (required).
-            Use a service like webhook.site for testing.
     """
-    body: dict[str, Any] = {"trackId": track_id}
-    if webhook:
-        body["webhook"] = webhook
-    return _ark_request("POST", "/v1/people/email-finder", body=body)
+    receipt_id = secrets.token_urlsafe(16)
+    body: dict[str, Any] = {
+        "trackId": track_id,
+        "webhook": _webhook_url_for(receipt_id),
+    }
+    result = _ark_request("POST", "/v1/people/email-finder", body=body)
+
+    if "error" not in result:
+        result_track = result.get("trackId", track_id)
+        _save_receipt_mapping(result_track, receipt_id)
+        result["_hint"] = f"Use get_export_results(track_id='{result_track}') to poll for results."
+
+    return result
 
 
 @mcp.tool()
@@ -623,21 +658,54 @@ def get_email_statistics(track_id: str) -> dict:
 
 
 @mcp.tool()
-def resend_webhook(track_id: str, webhook: str) -> dict:
-    """Resend a webhook notification for a completed email-finding job.
+def get_export_results(track_id: str) -> dict:
+    """Retrieve the results of an email export or email-finder job.
 
-    Use this when the initial webhook delivery failed or you need to
-    send results to a different URL. AI Ark automatically retries
-    webhooks up to 30 times, but this lets you manually re-trigger.
+    After calling export_people_with_email or find_emails_by_track_id,
+    use this tool to poll for results. Returns the full contact + verified
+    email data once complete, or a progress update if still processing.
 
-    Note: This endpoint may not be available on all AI Ark plans.
-    If you get a 404, the feature is not enabled for your account.
+    Typical flow:
+      1. Call export_people_with_email → get trackId
+      2. Call get_export_results(trackId) → "processing" or full data
 
     Args:
-        track_id: The trackId from the original request.
-        webhook: The URL to send the webhook notification to.
+        track_id: The trackId from an export or email-finder response.
     """
-    return _ark_request("PATCH", "/v1/people/notify", body={"trackId": track_id, "webhook": webhook})
+    receipt_id = _load_receipt_id(track_id)
+    if receipt_id:
+        result_path = _RESULTS_DIR / f"{receipt_id}.json"
+        if result_path.exists():
+            try:
+                return json.loads(result_path.read_text())
+            except Exception as exc:
+                return {"error": f"Failed to read results: {exc}"}
+
+    stats = _ark_request("GET", f"/v1/people/statistics/{track_id}")
+    if "error" in stats:
+        return stats
+
+    state = stats.get("state", "UNKNOWN")
+    total = stats.get("statistics", {}).get("total", 0)
+    found = stats.get("statistics", {}).get("found", 0)
+
+    if state == "DONE":
+        if receipt_id:
+            result_path = _RESULTS_DIR / f"{receipt_id}.json"
+            if result_path.exists():
+                return json.loads(result_path.read_text())
+        return {
+            "status": "completed_awaiting_delivery",
+            "message": f"Email finding is DONE ({found}/{total} found). Results arriving shortly — try again in a few seconds.",
+            "statistics": stats.get("statistics"),
+        }
+
+    return {
+        "status": "processing",
+        "message": f"Still processing: {found}/{total} emails found so far. State: {state}. Poll again in 10-30 seconds.",
+        "statistics": stats.get("statistics"),
+        "state": state,
+    }
 
 
 @mcp.tool()
@@ -647,6 +715,33 @@ def get_credits() -> dict:
     Returns the total number of remaining credits.
     """
     return _ark_request("GET", "/v1/payments/credits")
+
+
+# ── Webhook receiver ─────────────────────────────────────────────────────────
+
+async def webhook_receiver(request: Request):
+    """Receives webhook POSTs from AI Ark and stores the payload."""
+    track_id = request.path_params.get("track_id", "")
+    if not track_id:
+        return JSONResponse({"error": "missing track_id"}, status_code=400)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        body = await request.body()
+        payload = {"raw": body.decode(errors="replace")}
+
+    _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    result_path = _RESULTS_DIR / f"{track_id}.json"
+    result_path.write_text(json.dumps(payload))
+    print(f"[webhook] stored results for trackId={track_id} ({len(json.dumps(payload))} bytes)", flush=True)
+
+    return JSONResponse({"received": True})
+
+
+def _webhook_url_for(track_id: str) -> str:
+    """Generate the MCP server's own webhook URL for a given trackId."""
+    return f"{_get_base_url()}/webhook/{track_id}"
 
 
 # ── OAuth 2.1 endpoints ──────────────────────────────────────────────────────
@@ -869,6 +964,7 @@ class ArkAuthMiddleware:
         "/authorize",
         "/token",
         "/register",
+        "/webhook/",
     )
 
     def __init__(self, app: ASGIApp) -> None:
@@ -955,6 +1051,7 @@ def _build_app() -> ASGIApp:
         Route("/register", register, methods=["POST"]),
         Route("/authorize", authorize, methods=["GET", "POST"]),
         Route("/token", token_endpoint, methods=["POST"]),
+        Route("/webhook/{track_id}", webhook_receiver, methods=["POST"]),
         Route("/mcp", mcp_handler),
         Route("/sse", handle_sse, methods=["GET"]),
         Mount("/messages", app=sse.handle_post_message),

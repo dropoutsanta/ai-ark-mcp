@@ -1,29 +1,37 @@
 # AI Ark MCP Server
 
-An MCP (Model Context Protocol) server that gives AI agents full access to the [AI Ark](https://ai-ark.com) API — search 400M+ people, 69M+ companies, find verified emails, phone numbers, and analyze personalities.
+An open-source MCP (Model Context Protocol) server that gives AI agents full access to the [AI Ark](https://ai-ark.com) API — search 400M+ people, 69M+ companies, find verified emails, phone numbers, and analyze personalities.
 
 Works with Cursor, Claude, Windsurf, and any MCP-compatible client.
 
-**Hosted at:** `https://ai-ark-mcp.fly.dev/mcp`
-**GitHub:** [github.com/dropoutsanta/ai-ark-mcp](https://github.com/dropoutsanta/ai-ark-mcp)
+## Deploy
 
-## Quick Setup
+This MCP server needs to be deployed to a public URL (for email webhook reception). Fly.io works well:
 
-Add this to your MCP config (e.g. `~/.cursor/mcp.json`):
+```bash
+git clone https://github.com/dropoutsanta/ai-ark-mcp.git
+cd ai-ark-mcp
+
+fly launch
+fly volumes create ark_data --size 1 --region yyz
+fly deploy
+
+fly secrets set MCP_BASE_URL=https://your-app.fly.dev
+```
+
+Then add it to your MCP config (e.g. `~/.cursor/mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "ai-ark": {
-      "url": "https://ai-ark-mcp.fly.dev/mcp"
+      "url": "https://your-app.fly.dev/mcp"
     }
   }
 }
 ```
 
 When you connect, you'll be prompted to enter your AI Ark API key. Get one at [ai-ark.com → API → Developer Portal](https://ai-ark.com).
-
-That's it. No server to run, no webhook setup, no config files.
 
 ## What You Can Do
 
@@ -45,7 +53,7 @@ Search 69M+ companies by industry, size, tech stack, revenue, location, or find 
 
 ### Find Verified Emails (async — 15-120 seconds)
 
-This is the most powerful feature. Search for people and get their verified email addresses in one flow. Here's how it works:
+Search for people and get their verified email addresses in one flow:
 
 ```
 Step 1: "Find emails for CEOs at SaaS companies in the US"
@@ -58,8 +66,6 @@ Step 2: Agent automatically polls get_export_results(trackId)
 ```
 
 Each email is verified in real time by BounceBan. You get the email address, validation status (VALID/INVALID), and the MX provider (Google, Microsoft, etc).
-
-**How this works under the hood:** AI Ark's API delivers email results via webhook — but AI agents can't receive webhooks. Our MCP server handles this automatically. It hosts a webhook receiver on Fly.io, catches the results, stores them, and serves them back to the agent when it polls. You don't need to think about any of this — just ask for emails and they show up.
 
 ### Find Phone Numbers (instant)
 
@@ -108,56 +114,27 @@ Analyze anyone's personality from their LinkedIn profile. Returns DISC assessmen
 | `analyze_personality` | DISC/Big Five personality analysis from LinkedIn | Instant |
 | `get_credits` | Check remaining API credits | Instant |
 
-## The Email Webhook Problem (and how we solved it)
+## How Email Finding Works
 
-AI Ark's email-finding API is webhook-only — when emails are done, they POST results to a URL you provide. There's no endpoint to fetch results by ID.
+AI Ark's email-finding API is webhook-only — when emails are verified, they POST results to a URL you provide. There's no endpoint to fetch results by ID after completion.
 
-This is a problem for AI agents and local tools that can't expose a public HTTP endpoint.
+This is a problem for AI agents and local tools that can't expose a public HTTP endpoint to receive webhooks.
 
-**Our solution:** This MCP server runs on Fly.io and acts as the webhook receiver. When you ask for emails:
+This MCP server solves it by acting as the webhook receiver:
 
-1. The MCP server generates a unique callback URL on itself (`https://ai-ark-mcp.fly.dev/webhook/{id}`)
+1. When you ask for emails, the server generates a unique callback URL on itself (e.g. `https://your-app.fly.dev/webhook/{id}`)
 2. It passes that URL to AI Ark as the webhook
-3. AI Ark verifies the emails and POSTs results back to our server
-4. Results are stored on disk
+3. AI Ark verifies the emails and POSTs results back to the server
+4. Results are stored on disk (Fly volume)
 5. When the agent polls `get_export_results`, it reads from the stored data
 
-The agent just sees: ask for emails → poll → get emails. No webhook complexity.
+The agent just sees: ask for emails → poll → get emails. No webhook complexity exposed.
 
-## Self-Hosting
-
-If you want to run your own instance:
-
-```bash
-git clone https://github.com/dropoutsanta/ai-ark-mcp.git
-cd ai-ark-mcp
-
-# Deploy to Fly.io
-fly launch
-fly volumes create ark_data --size 1 --region yyz
-fly deploy
-
-# Set your base URL
-fly secrets set MCP_BASE_URL=https://your-app.fly.dev
-```
-
-Update your MCP config to point to your instance:
-
-```json
-{
-  "mcpServers": {
-    "ai-ark": {
-      "url": "https://your-app.fly.dev/mcp"
-    }
-  }
-}
-```
-
-**Note:** Email finding requires a deployed server (for webhook reception). If you run the MCP locally without a public URL, everything works except email-related tools.
+**This is why the server needs a public URL** — it has to be reachable by AI Ark's webhook delivery. If you run it locally without a public URL, everything works except email-related tools.
 
 ## Authentication
 
-Uses OAuth 2.1. When you first connect from Cursor/Claude, a browser window opens where you paste your AI Ark API key. After that, you stay authenticated — even across server restarts. Each MCP connection gets its own credentials, so you can have multiple API keys connected simultaneously.
+Uses OAuth 2.1. When you first connect from Cursor/Claude, a browser window opens where you paste your AI Ark API key. After that, you stay authenticated — even across server restarts (state is persisted to the Fly volume). Each MCP connection gets its own credentials, so you can have multiple API keys connected simultaneously.
 
 ## Credits
 

@@ -5,6 +5,7 @@ An MCP (Model Context Protocol) server that gives AI agents full access to the [
 Works with Cursor, Claude, Windsurf, and any MCP-compatible client.
 
 **Hosted at:** `https://ai-ark-mcp.fly.dev/mcp`
+**GitHub:** [github.com/dropoutsanta/ai-ark-mcp](https://github.com/dropoutsanta/ai-ark-mcp)
 
 ## Quick Setup
 
@@ -160,4 +161,4 @@ Uses OAuth 2.1. When you first connect from Cursor/Claude, a browser window open
 
 ## Credits
 
-Built by [CheapInboxes.com](https://cheapinboxes.com). API by [AI Ark](https://ai-ark.com).
+Built by [Nick Tomic](https://linkedin.com/in/nicktomic). API by [AI Ark](https://ai-ark.com).

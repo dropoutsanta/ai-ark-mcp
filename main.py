@@ -753,6 +753,70 @@ def get_export_results(track_id: str) -> dict:
 
 
 @mcp.tool()
+def list_previous_exports() -> dict:
+    """List all previously completed email exports stored on this server.
+
+    Use this to find results from past export_people_with_email or
+    find_emails_by_track_id calls — even if you don't have the trackId.
+
+    Returns a list of exports with trackId, receipt time, file size,
+    and a summary of people count. Use get_export_results(track_id)
+    to retrieve the full data for any listed export.
+    """
+    mapping_path = _RESULTS_DIR / "_mappings.json"
+    mappings: dict[str, str] = {}
+    if mapping_path.exists():
+        try:
+            mappings = json.loads(mapping_path.read_text())
+        except Exception:
+            pass
+
+    reverse_map = {v: k for k, v in mappings.items()}
+    exports = []
+
+    if not _RESULTS_DIR.exists():
+        return {"exports": [], "total": 0}
+
+    for f in sorted(_RESULTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if f.name.startswith("_"):
+            continue
+        receipt_id = f.stem
+        track_id = reverse_map.get(receipt_id, None)
+        stat = f.stat()
+        size_kb = round(stat.st_size / 1024, 1)
+
+        summary: dict[str, Any] = {
+            "receipt_id": receipt_id,
+            "track_id": track_id,
+            "size_kb": size_kb,
+            "stored_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(stat.st_mtime)),
+        }
+
+        try:
+            data = json.loads(f.read_text())
+            people = data.get("data", [])
+            if isinstance(people, list):
+                summary["people_count"] = len(people)
+                emails_found = 0
+                for p in people:
+                    email_out = p.get("email", {}).get("output", [])
+                    emails_found += sum(1 for e in email_out if e.get("status") == "VALID")
+                summary["valid_emails"] = emails_found
+                if people:
+                    first = people[0]
+                    summary["sample"] = {
+                        "name": first.get("identifier", "?"),
+                        "company": first.get("company", {}).get("summary", {}).get("name", "?"),
+                    }
+        except Exception:
+            pass
+
+        exports.append(summary)
+
+    return {"exports": exports, "total": len(exports)}
+
+
+@mcp.tool()
 def get_credits() -> dict:
     """Check remaining AI Ark API credits. Returns the credit balance."""
     return _ark_request("GET", "/v1/payments/credits")

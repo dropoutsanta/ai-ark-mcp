@@ -11,6 +11,10 @@ primary_region = 'yyz'
   min_machines_running = 1
   concurrency_limit = 500
 
+[[vm]]
+  size = "performance-1x"
+  memory = "2gb"
+
 [mounts]
   source = "ark_data"
   destination = "/data"
